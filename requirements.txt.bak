@@ -3,4 +3,3 @@ aiohttp
 protobuf
 pycryptodome
 requests
-flask-cors
