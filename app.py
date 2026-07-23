@@ -18,6 +18,7 @@ import threading
 import time
 import tempfile
 import requests as req_lib
+import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
@@ -32,9 +33,17 @@ from protobuf import my_pb2, output_pb2
 app = Flask(__name__)
 CORS(app)
 
-# ── Security ──────────────────────────────────────────────────────────
-import secrets as _secrets
+def start_cloudflare():
+    try:
+        subprocess.Popen(
+            ["cloudflared", "tunnel", "--url", "http://127.0.0.1:3000"]
+        )
+        print("[Cloudflare] Tunnel starting...")
+    except Exception as e:
+        print(f"[Cloudflare] Error: {e}")
 
+# ── Security ──────────────────────────────────────────
+import secrets as _secrets
 _ACCOUNTS_SECURITY_CODE = os.environ.get("ACCOUNTS_SECURITY_CODE", "mehedixaura")
 
 _ADMIN_KEY = os.environ.get("ADMIN_KEY") or _secrets.token_hex(16)
@@ -581,6 +590,13 @@ if __name__ == "__main__":
     _do_generate_tokens("BD")
     print("[startup] BD token generation completed.")
 
+    # Cloudflare Tunnel Start
+    threading.Thread(
+        target=start_cloudflare,
+        daemon=True
+    ).start()
+
     port = int(os.environ.get("PORT", 3000))
     print(f"🚀 Visit API on port {port}")
+
     app.run(host="0.0.0.0", port=port, debug=False)
