@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-🔥 FREE FIRE VISIT API - VERCEL FIXED 🔥
-Owner: @bigbullghost999
+🔥 FREE FIRE VISIT API - VERCEL OPTIMIZED 🔥
+Owner: @mehedixaura
 """
 
 import os
-import sys
 import json
 import time
 import asyncio
@@ -82,19 +81,15 @@ def Encrypt_ID(x):
     return ""
 
 # ============================================================
-#  TOKEN LOADER - token_bd.json
+#  TOKEN LOADER
 # ============================================================
 def load_tokens(region="BD"):
     filename = f"token_{region.lower()}.json"
-    
     if not os.path.exists(filename):
-        print(f"[!] {filename} not found!")
         return []
-    
     try:
         with open(filename, 'r') as f:
             data = json.load(f)
-        
         tokens = []
         if isinstance(data, list):
             for item in data:
@@ -103,8 +98,7 @@ def load_tokens(region="BD"):
                     if token:
                         try:
                             decoded = jwt.decode(token, options={"verify_signature": False})
-                            exp = decoded.get('exp', 0)
-                            if exp > time.time():
+                            if decoded.get('exp', 0) > time.time():
                                 tokens.append(token)
                         except:
                             pass
@@ -115,16 +109,12 @@ def load_tokens(region="BD"):
                     if token:
                         try:
                             decoded = jwt.decode(token, options={"verify_signature": False})
-                            exp = decoded.get('exp', 0)
-                            if exp > time.time():
+                            if decoded.get('exp', 0) > time.time():
                                 tokens.append(token)
                         except:
                             pass
-        
-        print(f"[✓] Loaded {len(tokens)} valid tokens from {filename}")
         return tokens
-    except Exception as e:
-        print(f"[✗] Error loading {filename}: {e}")
+    except:
         return []
 
 # ============================================================
@@ -142,10 +132,9 @@ async def _send_one(session, url, token, data):
         async with session.post(url, headers=headers, data=data, ssl=False,
                                 timeout=aiohttp.ClientTimeout(total=10)) as resp:
             if resp.status == 200:
-                body = await resp.read()
-                return True, body
+                return True, await resp.read()
             return False, None
-    except Exception:
+    except:
         return False, None
 
 def _visit_url(region):
@@ -169,7 +158,6 @@ async def _run_visits(uid, region, target=VISITS_TARGET):
     
     total_ok = 0
     total_sent = 0
-    player_info = None
     fail_rounds = 0
     
     connector = aiohttp.TCPConnector(limit=50, ssl=False)
@@ -181,39 +169,23 @@ async def _run_visits(uid, region, target=VISITS_TARGET):
             import random
             batch_tokens = random.sample(tokens, min(batch_size, len(tokens)))
             
-            tasks = []
-            for token in batch_tokens:
-                tasks.append(asyncio.create_task(_send_one(session, url, token, data)))
-            
+            tasks = [asyncio.create_task(_send_one(session, url, token, data)) for token in batch_tokens]
             results = await asyncio.gather(*tasks, return_exceptions=True)
             
-            batch_ok = 0
-            for r in results:
-                if isinstance(r, tuple):
-                    ok, body = r
-                    if ok:
-                        batch_ok += 1
-                        if player_info is None and body:
-                            try:
-                                player_info = {"uid": uid}
-                            except:
-                                pass
+            batch_ok = sum(1 for r in results if isinstance(r, tuple) and r[0])
             
             total_ok += batch_ok
             total_sent += len(batch_tokens)
             
-            print(f"[visit] uid={uid} region={region} batch_ok={batch_ok}/{len(batch_tokens)} total={total_ok}/{target}")
-            
             if batch_ok == 0:
                 fail_rounds += 1
                 if fail_rounds >= MAX_FAIL_ROUNDS:
-                    print(f"[visit] ❌ All tokens failed after {MAX_FAIL_ROUNDS} rounds!")
                     break
                 await asyncio.sleep(1)
             else:
                 fail_rounds = 0
     
-    return total_ok, total_sent, player_info
+    return total_ok, total_sent, None
 
 # ============================================================
 #  ROUTES
@@ -224,11 +196,7 @@ def index():
         "status": "online",
         "api": "Free Fire Visit API",
         "version": "3.0",
-        "credit": "MEHEDI X AURA",
-        "token_file": "token_bd.json",
-        "endpoints": {
-            "visit": "GET /visit?uid=<UID>&region=BD"
-        }
+        "credit": "MEHEDI X AURA"
     })
 
 @app.route("/visit", methods=["GET"])
@@ -237,36 +205,30 @@ def visit():
     region = request.args.get("region", "BD").strip().upper()
     
     if region not in ("BD", "IND", "BR", "US", "SAC", "NA", "VN"):
-        return jsonify({"error": "Invalid region. Use: BD, IND, BR, US, NA, VN"}), 400
+        return jsonify({"error": "Invalid region"}), 400
     
-    if not uid_str:
-        return jsonify({"error": "Missing uid. Example: /visit?uid=8568636511&region=BD"}), 400
+    if not uid_str or not uid_str.isdigit():
+        return jsonify({"error": "Valid uid required"}), 400
     
-    try:
-        uid_int = int(uid_str)
-    except ValueError:
-        return jsonify({"error": "uid must be a number"}), 400
-    
+    uid_int = int(uid_str)
     tokens = load_tokens(region)
     if not tokens:
-        return jsonify({"error": f"No valid tokens found in token_{region.lower()}.json"}), 500
-    
-    print(f"[visit] ▶ uid={uid_int} region={region} valid_tokens={len(tokens)}")
+        return jsonify({"error": f"No valid tokens in token_{region.lower()}.json"}), 500
     
     loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
-        asyncio.set_event_loop(loop)
-        total_ok, total_sent, player_info = loop.run_until_complete(
+        total_ok, total_sent, _ = loop.run_until_complete(
             asyncio.wait_for(_run_visits(uid_int, region, VISITS_TARGET), timeout=REQUEST_TIMEOUT)
         )
     except asyncio.TimeoutError:
-        return jsonify({"error": f"Timed out after {REQUEST_TIMEOUT}s"}), 504
+        return jsonify({"error": "Timeout"}), 504
     except Exception as e:
-        return jsonify({"error": f"Visit failed: {str(e)}"}), 500
+        return jsonify({"error": str(e)}), 500
     finally:
         loop.close()
     
-    result = {
+    return jsonify({
         "uid": uid_int,
         "region": region,
         "visits_sent": total_sent,
@@ -274,52 +236,16 @@ def visit():
         "visits_failed": total_sent - total_ok,
         "status": "success" if total_ok >= VISITS_TARGET else "partial",
         "credit": "MEHEDI X AURA"
-    }
-    
-    return jsonify(result), 200 if total_ok >= VISITS_TARGET else 206
+    }), 200 if total_ok >= VISITS_TARGET else 206
 
 # ============================================================
-#  TOKEN STATUS
+#  VERCEL HANDLER
 # ============================================================
-@app.route("/token-status", methods=["GET"])
-def token_status():
-    region = request.args.get("region", "BD").strip().upper()
-    tokens = load_tokens(region)
-    return jsonify({
-        "region": region,
-        "total_tokens": len(tokens),
-        "file": f"token_{region.lower()}.json"
-    })
-
-# ============================================================
-#  VERCEL COMPATIBLE HANDLER
-# ============================================================
-# Vercel uses this as entry point
 app_handler = app
 
 # ============================================================
-#  START
+#  MAIN
 # ============================================================
 if __name__ == "__main__":
-    print("""
-╔═══════════════════════════════════════════════════════════╗
-║     ██╗   ██╗██╗  ████████╗██████╗  █████╗              ║
-║     ██║   ██║██║  ╚══██╔══╝██╔══██╗██╔══██╗             ║
-║     ██║   ██║██║     ██║   ██████╔╝███████║             ║
-║     ██║   ██║██║     ██║   ██╔══██╗██╔══██║             ║
-║     ╚██████╔╝███████╗██║   ██║  ██║██║  ██║             ║
-║      ╚═════╝ ╚══════╝╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝             ║
-╚═══════════════════════════════════════════════════════════╝
-    """)
-    print("🔥 VISIT API - VERCEL FIXED")
-    print("📩 OWNER: @bigbullghost999\n")
-    
     port = int(os.environ.get("PORT", 3000))
-    
-    tokens = load_tokens("BD")
-    print(f"[✓] Loaded {len(tokens)} valid JWT tokens")
-    
-    print(f"🚀 Server running on http://0.0.0.0:{port}")
-    print(f"📌 Visit: http://localhost:{port}/visit?uid=YOUR_UID&region=BD")
-    
     app.run(host="0.0.0.0", port=port, debug=False)
