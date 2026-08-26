@@ -1,340 +1,144 @@
 #!/usr/bin/env python3
 """
-Free Fire Visit API — BD / IND Server
-Sends 1000 visits to a Free Fire player profile.
-Usage: GET /visit?uid=<UID>&region=BD
+🔥 FREE FIRE VISIT API - TOKEN_BD.JSON (FIXED) 🔥
+Owner: @bigbullghost999
 """
 
-from flask import Flask, jsonify, request
-from flask_cors import CORS
-import aiohttp
-import asyncio
-import json
 import os
 import sys
-import glob
-import warnings
-import threading
+import json
 import time
-import tempfile
-import requests as req_lib
-import subprocess
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import asyncio
+import aiohttp
+import warnings
+from flask import Flask, jsonify, request
+from flask_cors import CORS
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
+import jwt
 
 warnings.filterwarnings("ignore")
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from byte import encrypt_api, Encrypt_ID
-from visit_count_pb2 import Info
-from protobuf import my_pb2, output_pb2
+# ============================================================
+#  CONFIG
+# ============================================================
+VISITS_TARGET = 10000
+MAX_FAIL_ROUNDS = 3
+REQUEST_TIMEOUT = 240
+AES_KEY = b'Yg&tc%DEuh6%Zc^8'
+AES_IV = b'6oyZDr22E3ychjM%'
 
+# ============================================================
+#  FLASK APP
+# ============================================================
 app = Flask(__name__)
 CORS(app)
 
-def start_cloudflare():
+# ============================================================
+#  CRYPTO FUNCTIONS
+# ============================================================
+def encrypt_api(plain_text):
     try:
-        subprocess.Popen(
-            ["cloudflared", "tunnel", "--url", "http://127.0.0.1:3000"]
-        )
-        print("[Cloudflare] Tunnel starting...")
-    except Exception as e:
-        print(f"[Cloudflare] Error: {e}")
-
-# ── Security ──────────────────────────────────────────
-import secrets as _secrets
-_ACCOUNTS_SECURITY_CODE = os.environ.get("ACCOUNTS_SECURITY_CODE", "mehedixaura")
-
-_ADMIN_KEY = os.environ.get("ADMIN_KEY") or _secrets.token_hex(16)
-if not os.environ.get("ADMIN_KEY"):
-    print(f"[admin] No ADMIN_KEY set — generated random key: {_ADMIN_KEY}")
-
-def _check_admin():
-    key = request.headers.get("X-Admin-Key") or ""
-    if key != _ADMIN_KEY:
-        return jsonify({"error": "Unauthorized. Pass X-Admin-Key header."}), 401
-    return None
-
-def _check_security():
-    code = request.headers.get("X-Security-Code") or ""
-    if code != _ACCOUNTS_SECURITY_CODE:
-        return jsonify({"error": "Invalid security code. Pass X-Security-Code header."}), 401
-    return None
-
-# ── Config ────────────────────────────────────────────────────────────
-VISITS_TARGET      = 5000
-BATCH_TOKENS       = 69
-MAX_FAIL_ROUNDS    = 10
-REQUEST_TIMEOUT    = 120
-AUTO_REGEN_HOURS   = 5
-
-AES_KEY = b'Yg&tc%DEuh6%Zc^8'
-AES_IV  = b'6oyZDr22E3ychjM%'
-
-_token_cache: dict = {}
-_token_lock   = threading.RLock()
-_gen_executor = ThreadPoolExecutor(max_workers=80)
-
-# ── Helpers ───────────────────────────────────────────────────────────
-
-def _token_file(region: str) -> str:
-    r = region.upper()
-    if r == "IND":              return "token_ind.json"
-    if r in {"BR","US","SAC","NA"}: return "token_br.json"
-    if r == "VN":               return "token_vn.json"
-    return "token_bd.json"
-
-def _base_dir():
-    return os.path.dirname(os.path.abspath(__file__))
-
-def _load_tokens(region: str) -> list:
-    path = os.path.join(_base_dir(), _token_file(region))
-    if not os.path.exists(path):
-        return []
-    try:
-        with _token_lock:
-            with open(path) as f:
-                data = json.load(f)
-        return [d["token"] for d in data if d.get("token") not in ("", "N/A", None)]
-    except Exception as e:
-        app.logger.error(f"[token] Load error: {e}")
-        return []
-
-def _get_token_batch(region: str) -> list:
-    r = region.upper()
-
-    with _token_lock:
-        if r not in _token_cache:
-            _token_cache[r] = {
-                "tokens": _load_tokens(r),
-                "idx": 0
-            }
-
-        tokens = _token_cache[r]["tokens"]
-
-        if not tokens:
-            return []
-
-        return tokens.copy()
-
-def _visit_url(region: str) -> str:
-    r = region.upper()
-    if r == "IND":              return "https://client.ind.freefiremobile.com/GetPlayerPersonalShow"
-    if r in {"BR","US","SAC","NA"}: return "https://client.us.freefiremobile.com/GetPlayerPersonalShow"
-    if r == "VN":               return "https://clientbp.ggwhitehawk.com/GetPlayerPersonalShow"
-    return "https://clientbp.ggpolarbear.com/GetPlayerPersonalShow"
-
-def _parse_player(raw: bytes):
-    try:
-        info = Info()
-        info.ParseFromString(raw)
-        return {
-            "uid":      info.AccountInfo.UID,
-            "nickname": info.AccountInfo.PlayerNickname,
-            "region":   info.AccountInfo.PlayerRegion,
-            "level":    info.AccountInfo.Levels,
-            "likes":    info.AccountInfo.Likes,
-        }
-    except Exception:
-        return None
-
-# ── Token generation from accounts ───────────────────────────────────
-
-def _aes_encrypt(data: bytes) -> bytes:
+        plain_text = bytes.fromhex(plain_text)
+    except:
+        return ""
     cipher = AES.new(AES_KEY, AES.MODE_CBC, AES_IV)
-    return cipher.encrypt(pad(data, AES.block_size))
+    return cipher.encrypt(pad(plain_text, AES.block_size)).hex()
 
-def _parse_login_response(content: bytes) -> dict:
+def Encrypt_ID(x):
     try:
-        msg = output_pb2.Garena_420()
-        msg.ParseFromString(content)
-        result = {}
-        for line in str(msg).split("\n"):
-            if ":" in line:
-                k, v = line.split(":", 1)
-                result[k.strip()] = v.strip().strip('"')
-        return result
-    except Exception as e:
-        return {"error": str(e)}
+        x = int(x)
+    except:
+        return ""
+    dec = ['80','81','82','83','84','85','86','87','88','89','8a','8b','8c','8d','8e','8f',
+           '90','91','92','93','94','95','96','97','98','99','9a','9b','9c','9d','9e','9f',
+           'a0','a1','a2','a3','a4','a5','a6','a7','a8','a9','aa','ab','ac','ad','ae','af',
+           'b0','b1','b2','b3','b4','b5','b6','b7','b8','b9','ba','bb','bc','bd','be','bf',
+           'c0','c1','c2','c3','c4','c5','c6','c7','c8','c9','ca','cb','cc','cd','ce','cf',
+           'd0','d1','d2','d3','d4','d5','d6','d7','d8','d9','da','db','dc','dd','de','df',
+           'e0','e1','e2','e3','e4','e5','e6','e7','e8','e9','ea','eb','ec','ed','ee','ef',
+           'f0','f1','f2','f3','f4','f5','f6','f7','f8','f9','fa','fb','fc','fd','fe','ff']
+    xxx = ['1','01','02','03','04','05','06','07','08','09','0a','0b','0c','0d','0e','0f',
+           '10','11','12','13','14','15','16','17','18','19','1a','1b','1c','1d','1e','1f',
+           '20','21','22','23','24','25','26','27','28','29','2a','2b','2c','2d','2e','2f',
+           '30','31','32','33','34','35','36','37','38','39','3a','3b','3c','3d','3e','3f',
+           '40','41','42','43','44','45','46','47','48','49','4a','4b','4c','4d','4e','4f',
+           '50','51','52','53','54','55','56','57','58','59','5a','5b','5c','5d','5e','5f',
+           '60','61','62','63','64','65','66','67','68','69','6a','6b','6c','6d','6e','6f',
+           '70','71','72','73','74','75','76','77','78','79','7a','7b','7c','7d','7e','7f']
+    x = x / 128
+    if x > 128:
+        x = x / 128
+        if x > 128:
+            x = x / 128
+            if x > 128:
+                x = x / 128
+                strx = int(x)
+                y = (x - strx) * 128
+                z = (y - int(y)) * 128
+                n = (z - int(z)) * 128
+                m = (n - int(n)) * 128
+                return dec[int(m)] + dec[int(n)] + dec[int(z)] + dec[int(y)] + xxx[int(x)]
+    return ""
 
-def _generate_jwt(uid, password) -> dict:
+# ============================================================
+#  TOKEN LOADER - token_bd.json
+# ============================================================
+def load_tokens(region="BD"):
+    filename = f"token_{region.lower()}.json"
+    
+    if not os.path.exists(filename):
+        print(f"[!] {filename} not found!")
+        return []
+    
     try:
-        r = req_lib.post(
-            "https://100067.connect.garena.com/oauth/guest/token/grant",
-            headers={"User-Agent": "GarenaMSDK/4.0.19P9(SM-M526B ;Android 13;pt;BR;)",
-                     "Connection": "Keep-Alive", "Accept-Encoding": "gzip"},
-            data={"uid": uid, "password": password, "response_type": "token",
-                  "client_type": "2",
-                  "client_secret": "2ee44819e9b4598845141067b281621874d0d5d7af9d8f7e00c1e54715b7d1e3",
-                  "client_id": "100067"},
-            timeout=10
-        )
-        j = r.json()
-        access_token = j.get("access_token") or j.get("token") or j.get("session_key")
-        open_id = j.get("open_id", "")
-        if not access_token:
-            return {"success": False, "error": "No access_token", "uid": uid}
+        with open(filename, 'r') as f:
+            data = json.load(f)
+        
+        tokens = []
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict):
+                    token = item.get('token')
+                    if token:
+                        # Check token validity
+                        try:
+                            decoded = jwt.decode(token, options={"verify_signature": False})
+                            exp = decoded.get('exp', 0)
+                            if exp > time.time():
+                                tokens.append(token)
+                        except:
+                            pass
+        elif isinstance(data, dict):
+            for key, value in data.items():
+                if isinstance(value, dict):
+                    token = value.get('token')
+                    if token:
+                        try:
+                            decoded = jwt.decode(token, options={"verify_signature": False})
+                            exp = decoded.get('exp', 0)
+                            if exp > time.time():
+                                tokens.append(token)
+                        except:
+                            pass
+        
+        print(f"[✓] Loaded {len(tokens)} valid tokens from {filename}")
+        return tokens
     except Exception as e:
-        return {"success": False, "error": str(e), "uid": uid}
+        print(f"[✗] Error loading {filename}: {e}")
+        return []
 
-    try:
-        gd = my_pb2.GameData()
-        gd.timestamp = "2024-12-05 18:15:32"
-        gd.game_name = "free fire"
-        gd.game_version = 1
-        gd.version_code = "1.108.3"
-        gd.os_info = "Android OS 9 / API-28 (PI/rel.cjw.20220518.114133)"
-        gd.device_type = "Handheld"
-        gd.network_provider = "Verizon Wireless"
-        gd.connection_type = "WIFI"
-        gd.screen_width = 1280
-        gd.screen_height = 960
-        gd.dpi = "240"
-        gd.cpu_info = "ARMv7 VFPv3 NEON VMH | 2400 | 4"
-        gd.total_ram = 5951
-        gd.gpu_name = "Adreno (TM) 640"
-        gd.gpu_version = "OpenGL ES 3.0"
-        gd.user_id = "Google|74b585a9-0268-4ad3-8f36-ef41d2e53610"
-        gd.ip_address = "172.190.111.97"
-        gd.language = "en"
-        gd.open_id = open_id
-        gd.access_token = access_token
-        gd.platform_type = 4
-        gd.device_form_factor = "Handheld"
-        gd.device_model = "Asus ASUS_I005DA"
-        gd.field_60 = 32968; gd.field_61 = 29815; gd.field_62 = 2479; gd.field_63 = 914
-        gd.field_64 = 31213; gd.field_65 = 32968; gd.field_66 = 31213; gd.field_67 = 32968
-        gd.field_70 = 4; gd.field_73 = 2
-        gd.library_path = "/data/app/com.dts.freefireth-QPvBnTUhYWE-7DMZSOGdmA==/lib/arm"
-        gd.field_76 = 1
-        gd.apk_info = "5b892aaabd688e571f688053118a162b|/data/app/com.dts.freefireth-QPvBnTUhYWE-7DMZSOGdmA==/base.apk"
-        gd.field_78 = 6; gd.field_79 = 1
-        gd.os_architecture = "32"
-        gd.build_number = "2019117877"
-        gd.field_85 = 1
-        gd.graphics_backend = "OpenGLES2"
-        gd.max_texture_units = 16383
-        gd.rendering_api = 4
-        gd.encoded_field_89 = "\x17T\x11\x17\x02\x08\x0eUMQ\x08EZ\x03@ZK;Z\x02\x0eV\ri[QVi\x03\ro\x07e"
-        gd.field_92 = 9204
-        gd.marketplace = "3rd_party"
-        gd.encryption_key = "KqsHT2B4It60T/65PGR5PXwFxQkVjGNi+IMCK3CFBCBfrNpSUA1dZnjaT3HcYchlIFFL1ZJOg0cnulKCPGD3C3h1eFQ="
-        gd.total_storage = 111107
-        gd.field_97 = 1; gd.field_98 = 1
-        gd.field_99 = "4"; gd.field_100 = "4"
-        encrypted = _aes_encrypt(gd.SerializeToString())
-        resp = req_lib.post(
-            "https://loginbp.ggpolarbear.com/MajorLogin",
-            data=encrypted,
-            headers={"User-Agent": "GarenaMSDK/4.0.19P9(Android 13)", "Connection": "Keep-Alive",
-                     "Accept-Encoding": "gzip", "Content-Type": "application/x-www-form-urlencoded",
-                     "X-Unity-Version": "2018.4.11f1", "X-GA": "v1 1", "ReleaseVersion": "OB54"},
-            verify=False, timeout=15
-        )
-        if resp.status_code == 200:
-            parsed = _parse_login_response(resp.content)
-            jwt = parsed.get("token", "")
-            region = parsed.get("region", "BD")
-            api = parsed.get("api", "")
-            if jwt and jwt not in ("", "N/A", "null"):
-                return {"success": True, "uid": str(uid), "token": jwt, "region": region, "api": api}
-            return {"success": False, "error": "No JWT in response", "uid": uid}
-        return {"success": False, "error": f"HTTP {resp.status_code}", "uid": uid}
-    except Exception as e:
-        return {"success": False, "error": str(e), "uid": uid}
-
-def _load_accounts(region: str = None) -> list:
-    accounts = []
-    pattern = os.path.join(_base_dir(), "accounts-*.json")
-    for fpath in glob.glob(pattern):
-        try:
-            with open(fpath) as f:
-                data = json.load(f)
-            if isinstance(data, list):
-                for acc in data:
-                    if "uid" in acc and "password" in acc:
-                        acc_region = str(acc.get("region", "BD")).upper()
-                        if region is None or acc_region == region.upper():
-                            accounts.append({
-                                "uid": str(acc["uid"]),
-                                "password": str(acc["password"]),
-                                "region": acc_region
-                            })
-        except Exception as e:
-            app.logger.error(f"[accounts] Error loading {fpath}: {e}")
-    return accounts
-
-def _do_generate_tokens(region: str = None):
-    accounts = _load_accounts(region)
-    if not accounts:
-        return {"success": False, "error": "No accounts found"}
-    total = len(accounts)
-    print(f"[gen] Generating tokens for {total} accounts (region={region or 'ALL'})")
-    all_tokens: dict = {}
-    ok = 0; fail = 0
-    futures = {_gen_executor.submit(_generate_jwt, acc["uid"], acc["password"]): acc for acc in accounts}
-    for i, future in enumerate(as_completed(futures), 1):
-        acc = futures[future]
-        try:
-            result = future.result()
-            if result.get("success"):
-                r = result["region"]
-                all_tokens.setdefault(r, []).append({
-                    "uid": result["uid"], "token": result["token"],
-                    "region": r, "api": result.get("api", "")
-                })
-                ok += 1
-                print(f"[gen] [{i}/{total}] ✅ {result['uid']} ({r})")
-            else:
-                fail += 1
-                if i % 20 == 0:
-                    print(f"[gen] [{i}/{total}] ❌ {acc['uid']}: {result.get('error')}")
-        except Exception as e:
-            fail += 1
-    # Atomic write (tempfile + os.replace) under lock
-    for r, tokens in all_tokens.items():
-        path    = os.path.join(_base_dir(), _token_file(r))
-        dirpath = os.path.dirname(path)
-        with _token_lock:
-            try:
-                fd, tmp = tempfile.mkstemp(dir=dirpath, suffix=".tmp")
-                with os.fdopen(fd, "w") as f:
-                    json.dump(tokens, f, indent=2)
-                os.replace(tmp, path)
-            except Exception as e:
-                print(f"[gen] ⚠️  Failed to write {path}: {e}")
-                continue
-            _token_cache[r] = {"tokens": [t["token"] for t in tokens], "idx": 0}
-        print(f"[gen] 💾 Saved {len(tokens)} tokens → {_token_file(r)}")
-    return {
-        "success": True, "generated": ok, "failed": fail,
-        "regions": {r: len(t) for r, t in all_tokens.items()}
-    }
-
-# ── Auto token regeneration every 5 hours ────────────────────────────
-
-def _auto_regen_loop():
-    interval = AUTO_REGEN_HOURS * 3600
-    while True:
-        time.sleep(interval)
-        print(f"[auto-regen] ⏰ {AUTO_REGEN_HOURS}h elapsed — regenerating all tokens...")
-        try:
-            result = _do_generate_tokens(region=None)
-            print(f"[auto-regen] ✅ Done: {result}")
-        except Exception as e:
-            print(f"[auto-regen] ❌ Error: {e}")
-
-_regen_thread = threading.Thread(target=_auto_regen_loop, daemon=True, name="auto-regen")
-_regen_thread.start()
-print(f"[auto-regen] 🔄 Started — will regenerate JWT every {AUTO_REGEN_HOURS} hours")
-
-# ── Async visit logic ─────────────────────────────────────────────────
-
+# ============================================================
+#  VISIT FUNCTIONS
+# ============================================================
 async def _send_one(session, url, token, data):
     host = url.replace("https://", "").split("/")[0]
-    headers = {"ReleaseVersion": "OB54", "X-GA": "v1 1",
-                "Authorization": f"Bearer {token}", "Host": host}
+    headers = {
+        "ReleaseVersion": "OB54",
+        "X-GA": "v1 1",
+        "Authorization": f"Bearer {token}",
+        "Host": host
+    }
     try:
         async with session.post(url, headers=headers, data=data, ssl=False,
                                 timeout=aiohttp.ClientTimeout(total=10)) as resp:
@@ -342,25 +146,49 @@ async def _send_one(session, url, token, data):
                 body = await resp.read()
                 return True, body
             return False, None
-    except Exception:
+    except Exception as e:
         return False, None
 
-async def _run_visits(uid, region, target=VISITS_TARGET):
-    url  = _visit_url(region)
-    enc  = encrypt_api("08" + Encrypt_ID(str(uid)) + "1801")
-    data = bytes.fromhex(enc)
-    total_ok = 0; total_sent = 0; player_info = None; fail_rounds = 0
+def _visit_url(region):
+    r = region.upper()
+    if r == "IND":
+        return "https://client.ind.freefiremobile.com/GetPlayerPersonalShow"
+    if r in ("BR", "US", "SAC", "NA"):
+        return "https://client.us.freefiremobile.com/GetPlayerPersonalShow"
+    if r == "VN":
+        return "https://clientbp.ggwhitehawk.com/GetPlayerPersonalShow"
+    return "https://clientbp.ggpolarbear.com/GetPlayerPersonalShow"
 
-    connector = aiohttp.TCPConnector(limit=0, ssl=False)
+async def _run_visits(uid, region, target=VISITS_TARGET):
+    url = _visit_url(region)
+    enc = encrypt_api("08" + Encrypt_ID(str(uid)) + "1801")
+    data = bytes.fromhex(enc)
+    
+    tokens = load_tokens(region)
+    if not tokens:
+        return 0, 0, None
+    
+    total_ok = 0
+    total_sent = 0
+    player_info = None
+    fail_rounds = 0
+    
+    connector = aiohttp.TCPConnector(limit=100, ssl=False)
     async with aiohttp.ClientSession(connector=connector) as session:
         while total_ok < target:
-            tokens = _get_token_batch(region)
-            if not tokens: break
-            remaining  = target - total_ok
+            remaining = target - total_ok
             batch_size = min(remaining, len(tokens))
-            tasks   = [asyncio.create_task(_send_one(session, url, tokens[i % len(tokens)], data))
-                       for i in range(batch_size)]
+            
+            # Shuffle tokens for better distribution
+            import random
+            batch_tokens = random.sample(tokens, min(batch_size, len(tokens)))
+            
+            tasks = []
+            for token in batch_tokens:
+                tasks.append(asyncio.create_task(_send_one(session, url, token, data)))
+            
             results = await asyncio.gather(*tasks, return_exceptions=True)
+            
             batch_ok = 0
             for r in results:
                 if isinstance(r, tuple):
@@ -368,52 +196,65 @@ async def _run_visits(uid, region, target=VISITS_TARGET):
                     if ok:
                         batch_ok += 1
                         if player_info is None and body:
-                            player_info = _parse_player(body)
-            total_ok += batch_ok; total_sent += batch_size
-            print(f"[visit] uid={uid} region={region} batch_ok={batch_ok}/{batch_size} total={total_ok}/{target}")
+                            try:
+                                player_info = {"uid": uid}
+                            except:
+                                pass
+            
+            total_ok += batch_ok
+            total_sent += len(batch_tokens)
+            
+            print(f"[visit] uid={uid} region={region} batch_ok={batch_ok}/{len(batch_tokens)} total={total_ok}/{target}")
+            
             if batch_ok == 0:
                 fail_rounds += 1
-                if fail_rounds >= MAX_FAIL_ROUNDS: break
-                await asyncio.sleep(0.2)
+                if fail_rounds >= MAX_FAIL_ROUNDS:
+                    print(f"[visit] ❌ All tokens failed after {MAX_FAIL_ROUNDS} rounds!")
+                    break
+                await asyncio.sleep(0.5)
             else:
                 fail_rounds = 0
+    
     return total_ok, total_sent, player_info
 
-# ── Routes ────────────────────────────────────────────────────────────
-
+# ============================================================
+#  ROUTES
+# ============================================================
 @app.route("/")
 def index():
     return jsonify({
-        "status": "online", "api": "Free Fire Visit API", "version": "2.0",
-        "auto_regen_hours": AUTO_REGEN_HOURS,
+        "status": "online",
+        "api": "Free Fire Visit API",
+        "version": "3.0",
+        "credit": "MEHEDI X AURA",
+        "token_file": "token_bd.json",
         "endpoints": {
-            "visit":           "GET  /visit?uid=<UID>&region=BD|IND",
-            "token_status":    "GET  /token-status/<REGION>",
-            "reload":          "POST /reload-tokens  [X-Admin-Key]",
-            "gen_tokens":      "POST /generate-tokens?region=BD|IND  [X-Admin-Key]",
-            "accounts_list":   "GET  /accounts?region=BD|IND  [X-Security-Code]",
-            "accounts_upload": "POST /accounts/upload  [X-Security-Code]  body: JSON array",
-            "accounts_delete": "POST /accounts/delete  [X-Security-Code]  body: {region}",
-        },
-        "credit": "MEHEDI X AURA"
+            "visit": "GET /visit?uid=<UID>&region=BD"
+        }
     })
 
 @app.route("/visit", methods=["GET"])
 def visit():
     uid_str = request.args.get("uid", "").strip()
-    region  = request.args.get("region", "BD").strip().upper()
+    region = request.args.get("region", "BD").strip().upper()
+    
     if region not in ("BD", "IND", "BR", "US", "SAC", "NA", "VN"):
         return jsonify({"error": "Invalid region. Use: BD, IND, BR, US, NA, VN"}), 400
+    
     if not uid_str:
         return jsonify({"error": "Missing uid. Example: /visit?uid=8568636511&region=BD"}), 400
+    
     try:
         uid_int = int(uid_str)
     except ValueError:
         return jsonify({"error": "uid must be a number"}), 400
-    tokens = _load_tokens(region)
+    
+    tokens = load_tokens(region)
     if not tokens:
-        return jsonify({"error": f"No tokens for region {region}. Try POST /generate-tokens?region={region}"}), 500
-    print(f"[visit] ▶ uid={uid_int} region={region} tokens_available={len(tokens)}")
+        return jsonify({"error": f"No valid tokens found in token_{region.lower()}.json"}), 500
+    
+    print(f"[visit] ▶ uid={uid_int} region={region} valid_tokens={len(tokens)}")
+    
     loop = asyncio.new_event_loop()
     try:
         asyncio.set_event_loop(loop)
@@ -426,177 +267,56 @@ def visit():
         return jsonify({"error": f"Visit failed: {str(e)}"}), 500
     finally:
         loop.close()
-
-    base = {
-        "uid":            player_info.get("uid") if player_info else uid_int,
-        "nickname":       player_info.get("nickname", "") if player_info else "",
-        "region":         player_info.get("region", region) if player_info else region,
-        "level":          player_info.get("level", 0) if player_info else 0,
-        "likes":          player_info.get("likes", 0) if player_info else 0,
-        "visits_sent":    total_sent,
+    
+    result = {
+        "uid": uid_int,
+        "region": region,
+        "visits_sent": total_sent,
         "visits_success": total_ok,
-        "visits_failed":  total_sent - total_ok,
-        "tokens_used":    min(len(tokens), BATCH_TOKENS),
-        "credit":         "MEHEDI X AURA",
+        "visits_failed": total_sent - total_ok,
+        "status": "success" if total_ok >= VISITS_TARGET else "partial",
+        "credit": "MEHEDI X AURA"
     }
-    if total_ok >= VISITS_TARGET:
-        base["status"] = "success"
-        return jsonify(base), 200
-    else:
-        base["status"] = "partial"
-        base["note"] = f"Only {total_ok}/{VISITS_TARGET} visits succeeded. Tokens may be expired."
-        return jsonify(base), 206
+    
+    return jsonify(result), 200 if total_ok >= VISITS_TARGET else 206
 
-@app.route("/token-status/<string:region>", methods=["GET"])
-def token_status(region):
-    r      = region.upper()
-    tokens = _load_tokens(r)
-    state  = _token_cache.get(r, {})
+# ============================================================
+#  TOKEN STATUS
+# ============================================================
+@app.route("/token-status", methods=["GET"])
+def token_status():
+    region = request.args.get("region", "BD").strip().upper()
+    tokens = load_tokens(region)
     return jsonify({
-        "region": r, "total_tokens": len(tokens),
-        "current_index": state.get("idx", 0),
-        "file": _token_file(r),
-        "status": "ok" if tokens else "empty"
+        "region": region,
+        "total_tokens": len(tokens),
+        "file": f"token_{region.lower()}.json"
     })
 
-@app.route("/reload-tokens", methods=["POST"])
-def reload_tokens():
-    err = _check_admin()
-    if err: return err
-    with _token_lock:
-        _token_cache.clear()
-    return jsonify({"status": "cache cleared — tokens reload on next request"})
-
-@app.route("/generate-tokens", methods=["POST"])
-def generate_tokens():
-    err = _check_admin()
-    if err: return err
-    region = request.args.get("region", None)
-    if region:
-        region = region.upper()
-    try:
-        result = _do_generate_tokens(region)
-        return jsonify(result), 200 if result.get("success") else 500
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# ── Accounts management ───────────────────────────────────────────────
-
-@app.route("/accounts", methods=["GET"])
-def accounts_list():
-    err = _check_security()
-    if err: return err
-    region = request.args.get("region", None)
-    if region:
-        region = region.upper()
-    files = []
-    for fpath in sorted(glob.glob(os.path.join(_base_dir(), "accounts-*.json"))):
-        fname = os.path.basename(fpath)
-        try:
-            with open(fpath) as f:
-                data = json.load(f)
-            count = len(data) if isinstance(data, list) else 0
-            regions_in = list({str(a.get("region","?")).upper() for a in data if isinstance(a, dict)})
-        except Exception:
-            count = 0; regions_in = []
-        if region is None or region in regions_in:
-            files.append({"file": fname, "count": count, "regions": regions_in})
-    total_accounts = _load_accounts(region)
-    return jsonify({
-        "files": files,
-        "total_accounts": len(total_accounts),
-        "filter_region": region or "ALL"
-    })
-
-@app.route("/accounts/upload", methods=["POST"])
-def accounts_upload():
-    err = _check_security()
-    if err: return err
-    data = request.get_json(silent=True)
-    if not data or not isinstance(data, list):
-        return jsonify({"error": "Body must be a JSON array [{uid, password, region}, ...]"}), 400
-    valid = []
-    for acc in data:
-        if not isinstance(acc, dict): continue
-        uid = str(acc.get("uid","")).strip()
-        pw  = str(acc.get("password","")).strip()
-        reg = str(acc.get("region","BD")).strip().upper()
-        if uid and pw:
-            valid.append({"uid": uid, "password": pw, "region": reg})
-    if not valid:
-        return jsonify({"error": "No valid accounts found in body"}), 400
-    by_region: dict = {}
-    for acc in valid:
-        by_region.setdefault(acc["region"], []).append(acc)
-    merge = request.args.get("merge", "false").lower() == "true"
-    saved = {}
-    for reg, accs in by_region.items():
-        fpath = os.path.join(_base_dir(), f"accounts-{reg}.json")
-        if merge and os.path.exists(fpath):
-            try:
-                with open(fpath) as f:
-                    existing = json.load(f)
-                existing_uids = {str(a.get("uid")) for a in existing if isinstance(a, dict)}
-                new_only = [a for a in accs if str(a["uid"]) not in existing_uids]
-                merged = existing + new_only
-                with open(fpath, "w") as f:
-                    json.dump(merged, f, indent=2)
-                saved[reg] = {"action": "merged", "added": len(new_only), "total": len(merged)}
-            except Exception as e:
-                saved[reg] = {"action": "error", "error": str(e)}
-        else:
-            with open(fpath, "w") as f:
-                json.dump(accs, f, indent=2)
-            saved[reg] = {"action": "replaced", "total": len(accs)}
-        with _token_lock:
-            _token_cache.pop(reg, None)
-        print(f"[accounts] 📁 Saved {fpath} — {saved[reg]}")
-    return jsonify({
-        "success": True,
-        "message": "Accounts saved. Use POST /generate-tokens to generate fresh JWT tokens.",
-        "saved": saved
-    })
-
-@app.route("/accounts/delete", methods=["POST"])
-def accounts_delete():
-    err = _check_security()
-    if err: return err
-    body   = request.get_json(silent=True) or {}
-    region = str(body.get("region", "")).strip().upper()
-    if not region:
-        return jsonify({"error": 'Provide region in body: {"region": "BD"} or {"region": "ALL"}'}), 400
-    if region == "ALL":
-        targets = glob.glob(os.path.join(_base_dir(), "accounts-*.json"))
-    else:
-        targets = [os.path.join(_base_dir(), f"accounts-{region}.json")]
-    deleted = []
-    for fpath in targets:
-        if os.path.exists(fpath):
-            os.remove(fpath)
-            reg = os.path.basename(fpath).replace("accounts-","").replace(".json","")
-            with _token_lock:
-                _token_cache.pop(reg, None)
-            deleted.append(os.path.basename(fpath))
-            print(f"[accounts] 🗑️  Deleted {fpath}")
-    if not deleted:
-        return jsonify({"error": f"No accounts file found for region={region}"}), 404
-    return jsonify({
-        "success": True,
-        "deleted_files": deleted,
-        "message": "Accounts deleted. Token cache cleared."
-    })
+# ============================================================
+#  START
+# ============================================================
 if __name__ == "__main__":
-    print("[startup] Generating BD tokens...")
-    _do_generate_tokens("BD")
-    print("[startup] BD token generation completed.")
-
-    # Cloudflare Tunnel Start
-    threading.Thread(
-        target=start_cloudflare,
-        daemon=True
-    ).start()
-
+    print("""
+╔═══════════════════════════════════════════════════════════╗
+║     ██╗   ██╗██╗  ████████╗██████╗  █████╗              ║
+║     ██║   ██║██║  ╚══██╔══╝██╔══██╗██╔══██╗             ║
+║     ██║   ██║██║     ██║   ██████╔╝███████║             ║
+║     ██║   ██║██║     ██║   ██╔══██╗██╔══██║             ║
+║     ╚██████╔╝███████╗██║   ██║  ██║██║  ██║             ║
+║      ╚═════╝ ╚══════╝╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝             ║
+╚═══════════════════════════════════════════════════════════╝
+    """)
+    print("🔥 VISIT API - TOKEN_BD.JSON (FIXED)")
+    print("📩 OWNER: @bigbullghost999\n")
+    
     port = int(os.environ.get("PORT", 3000))
-    print(f"🚀 Visit API on port {port}")
-
+    
+    # Show token count
+    tokens = load_tokens("BD")
+    print(f"[✓] Loaded {len(tokens)} valid JWT tokens")
+    
+    print(f"🚀 Server running on http://0.0.0.0:{port}")
+    print(f"📌 Visit: http://localhost:{port}/visit?uid=YOUR_UID&region=BD")
+    
     app.run(host="0.0.0.0", port=port, debug=False)
