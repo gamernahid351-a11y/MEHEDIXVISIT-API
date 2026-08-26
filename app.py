@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-🔥 FREE FIRE VISIT API - TOKEN_BD.JSON (FIXED) 🔥
+🔥 FREE FIRE VISIT API - VERCEL FIXED 🔥
 Owner: @bigbullghost999
 """
 
@@ -101,7 +101,6 @@ def load_tokens(region="BD"):
                 if isinstance(item, dict):
                     token = item.get('token')
                     if token:
-                        # Check token validity
                         try:
                             decoded = jwt.decode(token, options={"verify_signature": False})
                             exp = decoded.get('exp', 0)
@@ -146,7 +145,7 @@ async def _send_one(session, url, token, data):
                 body = await resp.read()
                 return True, body
             return False, None
-    except Exception as e:
+    except Exception:
         return False, None
 
 def _visit_url(region):
@@ -173,13 +172,12 @@ async def _run_visits(uid, region, target=VISITS_TARGET):
     player_info = None
     fail_rounds = 0
     
-    connector = aiohttp.TCPConnector(limit=100, ssl=False)
+    connector = aiohttp.TCPConnector(limit=50, ssl=False)
     async with aiohttp.ClientSession(connector=connector) as session:
         while total_ok < target:
             remaining = target - total_ok
             batch_size = min(remaining, len(tokens))
             
-            # Shuffle tokens for better distribution
             import random
             batch_tokens = random.sample(tokens, min(batch_size, len(tokens)))
             
@@ -211,7 +209,7 @@ async def _run_visits(uid, region, target=VISITS_TARGET):
                 if fail_rounds >= MAX_FAIL_ROUNDS:
                     print(f"[visit] ❌ All tokens failed after {MAX_FAIL_ROUNDS} rounds!")
                     break
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(1)
             else:
                 fail_rounds = 0
     
@@ -294,6 +292,12 @@ def token_status():
     })
 
 # ============================================================
+#  VERCEL COMPATIBLE HANDLER
+# ============================================================
+# Vercel uses this as entry point
+app_handler = app
+
+# ============================================================
 #  START
 # ============================================================
 if __name__ == "__main__":
@@ -307,12 +311,11 @@ if __name__ == "__main__":
 ║      ╚═════╝ ╚══════╝╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝             ║
 ╚═══════════════════════════════════════════════════════════╝
     """)
-    print("🔥 VISIT API - TOKEN_BD.JSON (FIXED)")
+    print("🔥 VISIT API - VERCEL FIXED")
     print("📩 OWNER: @bigbullghost999\n")
     
     port = int(os.environ.get("PORT", 3000))
     
-    # Show token count
     tokens = load_tokens("BD")
     print(f"[✓] Loaded {len(tokens)} valid JWT tokens")
     
